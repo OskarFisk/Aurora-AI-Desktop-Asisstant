@@ -1,0 +1,51 @@
+name: Build and publish A.U.R.O.R.A EXE
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: Aurora-Ai/requirements.txt
+
+      - name: Install runtime and packaging dependencies
+        working-directory: Aurora-Ai
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller pytest
+
+      - name: Run release-readiness tests
+        working-directory: Aurora-Ai
+        run: python -m pytest -q tests/test_release_readiness.py
+
+      - name: Build one-file Windows executable
+        working-directory: Aurora-Ai
+        run: python -m PyInstaller --noconfirm --clean "A.U.R.O.R.A.spec"
+
+      - name: Verify bundled executable and runtime resources
+        working-directory: Aurora-Ai
+        run: .\dist\A.U.R.O.R.A.exe --health-check
+
+      - name: Publish EXE-only GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: A.U.R.O.R.A Desktop ${{ github.ref_name }}
+          generate_release_notes: true
+          files: Aurora-Ai/dist/A.U.R.O.R.A.exe
