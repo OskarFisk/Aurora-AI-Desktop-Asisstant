@@ -20,19 +20,56 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: Aurora-Ai/requirements.txt
+
+      - name: Download and verify bundled Qwen model
+        shell: pwsh
+        run: |
+          $modelPath = "Aurora-Ai/assets/models/Qwen_Qwen3-0.6B-Q6_K.gguf"
+          New-Item -ItemType Directory -Force (Split-Path $modelPath) | Out-Null
+          $modelUrl = "https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/resolve/60b85c0e3d8fe0f6474f406922a26d12aca4550d/Qwen_Qwen3-0.6B-Q6_K.gguf?download=true"
+          Invoke-WebRequest -Uri $modelUrl -OutFile $modelPath
+          $expectedHash = "21e95febea68b223089e2382378e8c3155e587f5a6618ae3595e3d00c6885575"
+          $actualHash = (Get-FileHash $modelPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Qwen model checksum mismatch." }
+          if ((Get-Item $modelPath).Length -ne 622733728) { throw "Qwen model size mismatch." }
+          $licensePath = "Aurora-Ai/assets/models/Qwen3-LICENSE"
+          $licenseUrl = "https://huggingface.co/Qwen/Qwen3-0.6B/resolve/c1899de289a04d12100db370d81485cdf75e47ca/LICENSE"
+          Invoke-WebRequest -Uri $licenseUrl -OutFile $licensePath
+          $licenseHash = (Get-FileHash $licensePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($licenseHash -ne "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e") { throw "Qwen license checksum mismatch." }
+
+      - name: Download and verify offline runtime wheel
+        shell: pwsh
+        run: |
+          $wheelPath = Join-Path $env:RUNNER_TEMP "llama_cpp_python-0.3.19-cp312-cp312-win_amd64.whl"
+          $wheelUrl = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.19/llama_cpp_python-0.3.19-cp312-cp312-win_amd64.whl"
+          Invoke-WebRequest -Uri $wheelUrl -OutFile $wheelPath
+          $expectedHash = "1843b30d90e35296dbd9bd0b2b753b42f0fafa6aec6d2b1c0fff352f801bc89b"
+          $actualHash = (Get-FileHash $wheelPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Offline runtime checksum mismatch." }
+          "LLAMA_CPP_WHEEL=$wheelPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install runtime and packaging dependencies
         working-directory: Aurora-Ai
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller pytest
+          python -m pip install -r requirements.txt pyinstaller pytest "$env:LLAMA_CPP_WHEEL"
 
       - name: Run release-readiness tests
         working-directory: Aurora-Ai
-        run: python -m pytest -q tests/test_release_readiness.py
+        run: python -m pytest -q tests
+
+      - name: Verify bundled offline model inputs
+        working-directory: Aurora-Ai
+        run: python -c "from core.bundled_model import is_available; assert is_available(), 'Bundled Qwen model is missing'"
+
+      - name: Smoke-test offline CPU inference
+        working-directory: Aurora-Ai
+        run: >-
+          python -c "from core.bundled_model import complete; result = complete([{'role': 'user', 'content': 'Reply with OK.'}], max_tokens=8); assert result['content'], 'Offline model returned no text'; print('Offline CPU inference passed')"
 
       - name: Build one-file Windows executable
         working-directory: Aurora-Ai
@@ -41,6 +78,17 @@ jobs:
       - name: Verify bundled executable and runtime resources
         working-directory: Aurora-Ai
         run: .\dist\A.U.R.O.R.A.exe --health-check
+
+      - name: Verify executable size target
+        working-directory: Aurora-Ai
+        shell: pwsh
+        run: |
+          $bytes = (Get-Item "dist/A.U.R.O.R.A.exe").Length
+          $targetBytes = 834000000
+          $toleranceBytes = 10000000
+          $difference = [Math]::Abs($bytes - $targetBytes)
+          Write-Host "A.U.R.O.R.A.exe size: $bytes bytes (target $targetBytes bytes)"
+          if ($difference -gt $toleranceBytes) { throw "Executable is outside the 834 MB target window." }
 
       - name: Publish EXE-only GitHub release
         if: startsWith(github.ref, 'refs/tags/')

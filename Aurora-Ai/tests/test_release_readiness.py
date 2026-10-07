@@ -5,9 +5,9 @@ from pathlib import Path
 
 from core import circuit_hud
 from core.user_paths import get_user_data_dir
+from diagnostics import collect_diagnostics
 from memory.config_manager import DEFAULT_ASSISTANT_NAME, normalize_assistant_name
 from plugins import circuit_assembler, daily_briefing
-from ui import THEME_PRESETS
 
 
 def test_brand_migrates_legacy_defaults_and_preserves_custom_names():
@@ -17,10 +17,20 @@ def test_brand_migrates_legacy_defaults_and_preserves_custom_names():
     assert normalize_assistant_name("Custom") == "Custom"
 
 
-def test_six_theme_presets_are_distinct_hex_colors():
-    assert len(THEME_PRESETS) == 6
-    colors = [color for _, color in THEME_PRESETS]
-    assert len(set(colors)) == 6
+def test_ten_theme_presets_are_distinct_hex_colors():
+    root = Path(__file__).resolve().parents[1]
+    ui_tree = ast.parse((root / "ui.py").read_text(encoding="utf-8"))
+    assignment = next(
+        node for node in ui_tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "THEME_PRESETS"
+                for target in node.targets)
+    )
+    theme_presets = ast.literal_eval(assignment.value)
+
+    assert len(theme_presets) == 10
+    colors = [color for _, color in theme_presets]
+    assert len(set(colors)) == 10
     assert all(len(color) == 7 and color.startswith("#") for color in colors)
 
 
@@ -63,6 +73,25 @@ def test_frozen_resource_requirements_are_bundled():
 
 def test_user_data_folder_has_application_identity():
     assert get_user_data_dir().name == "Aurora-AI"
+
+
+def test_diagnostics_report_missing_runtime_requirements_without_reading_config(tmp_path):
+    diagnostics = collect_diagnostics(
+        root=tmp_path,
+        python_version=(3, 12),
+        system="Windows",
+        module_finder=lambda _name: False,
+        command_finder=lambda _name: None,
+    )
+
+    assert any(item.status == "FAIL" and item.name == "Python version" for item in collect_diagnostics(
+        root=tmp_path,
+        python_version=(3, 10),
+        system="Windows",
+        module_finder=lambda _name: True,
+    ))
+    assert sum(item.status == "FAIL" for item in diagnostics) >= 5
+    assert not (tmp_path / "config" / "api_keys.json").exists()
 
 
 def test_daily_briefing_does_not_invent_weather_without_a_city():

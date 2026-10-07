@@ -1634,6 +1634,10 @@ THEME_PRESETS = (
     ("MATRIX GREEN", "#00ff88"),
     ("GLACIER BLUE", "#4da3ff"),
     ("CRIMSON CORE", "#ff3355"),
+    ("NEON LIME", "#c6ff00"),
+    ("PLASMA PINK", "#ff4fd8"),
+    ("ELECTRIC ORANGE", "#ff9f1c"),
+    ("ARCTIC TEAL", "#2dd4bf"),
 )
 
 

@@ -9,9 +9,11 @@ from typing import Callable, Generator
 
 import requests
 from core.ai_providers import (
+    BUNDLED_OFFLINE_PROVIDER,
     OPENAI_COMPATIBLE_PROVIDERS,
     get_provider_config,
 )
+from core import bundled_model
 
 # Matches a sentence boundary: [.!?] followed by whitespace, or a blank line.
 # Avoids splitting on decimals (3.5) because those have no space after the dot.
@@ -37,6 +39,8 @@ def get_llm_provider() -> str:
     """Return the selected local or cloud provider, retaining legacy settings."""
     config = _load_config()
     selected = config.get("default_ai_provider")
+    if selected == BUNDLED_OFFLINE_PROVIDER:
+        return BUNDLED_OFFLINE_PROVIDER
     if selected in OPENAI_COMPATIBLE_PROVIDERS or selected == "Anthropic":
         return selected
     if selected == "Local Server":
@@ -63,6 +67,8 @@ def ensure_ollama_running(timeout: int = 15) -> bool:
 
     if provider in OPENAI_COMPATIBLE_PROVIDERS or provider == "Anthropic":
         return True
+    if provider == BUNDLED_OFFLINE_PROVIDER:
+        return bundled_model.is_available()
 
     if provider == "openai":
         # OpenAI-compatible servers (LM Studio, LocalAI, etc.) must be started
@@ -137,6 +143,8 @@ def warmup_model(system_prompt: str | None = None) -> bool:
     provider   = get_llm_provider()
     print(f"[LLM] Warming up '{model}' ({provider})…")
 
+    if provider == BUNDLED_OFFLINE_PROVIDER:
+        return bundled_model.is_available()
     if provider in OPENAI_COMPATIBLE_PROVIDERS or provider == "Anthropic":
         return True
 
@@ -189,7 +197,13 @@ def check_model_available(log: Callable | None = None) -> bool:
     Logs an actionable warning (to console + optional UI callback) if not.
     Always returns True for non-Ollama providers (cannot inspect their model list).
     """
-    if get_llm_provider() != "ollama":
+    provider = get_llm_provider()
+    if provider == BUNDLED_OFFLINE_PROVIDER:
+        available = bundled_model.is_available()
+        if not available and log:
+            log("WRN: bundled offline model is missing from this install.")
+        return available
+    if provider != "ollama":
         return True
 
     url, model = get_llm_settings()
@@ -221,6 +235,8 @@ def get_llm_settings() -> tuple[str, str]:
     """Returns (base_url, model_name)."""
     cfg   = _load_config()
     provider = get_llm_provider()
+    if provider == BUNDLED_OFFLINE_PROVIDER:
+        return "bundled://", bundled_model.MODEL_FILENAME
     provider_config = get_provider_config(provider)
     if provider_config:
         overrides = cfg.get("cloud_models", {})
@@ -358,8 +374,11 @@ def call_llm(
     Returns:
         {"content": str, "tool_calls": list}
     """
-    url, model = get_llm_settings()
     provider   = get_llm_provider()
+    if provider == BUNDLED_OFFLINE_PROVIDER:
+        return bundled_model.complete(messages, tools, max_tokens=150)
+
+    url, model = get_llm_settings()
 
     if provider in OPENAI_COMPATIBLE_PROVIDERS or provider == "Anthropic":
         return _cloud_completion(messages, tools, timeout)
@@ -462,13 +481,17 @@ def call_llm_text(
     Simple text-only generation (no tools).
     Used by planner, executor, error_handler, code_helper, dev_agent.
     """
-    url, default_model = get_llm_settings()
-    if get_llm_provider() in OPENAI_COMPATIBLE_PROVIDERS or get_llm_provider() == "Anthropic":
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
+    provider = get_llm_provider()
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    if provider == BUNDLED_OFFLINE_PROVIDER:
+        return bundled_model.complete(messages, max_tokens=600)["content"]
+    if provider in OPENAI_COMPATIBLE_PROVIDERS or provider == "Anthropic":
         return _cloud_completion(messages, None, timeout, model)["content"]
+
+    url, default_model = get_llm_settings()
 
     endpoint = f"{url}/api/chat"
     m        = model or default_model
@@ -635,6 +658,17 @@ def call_llm_stream(
     Tool calls always appear in the final "done" event.
     """
     provider = get_llm_provider()
+    if provider == BUNDLED_OFFLINE_PROVIDER:
+        result = bundled_model.complete(messages, tools, max_tokens=150)
+        for sentence in _SENT_END.split(result["content"]):
+            if sentence.strip():
+                yield {"type": "sentence", "text": sentence.strip()}
+        yield {
+            "type": "done",
+            "content": result["content"],
+            "tool_calls": result["tool_calls"],
+        }
+        return
     if provider in OPENAI_COMPATIBLE_PROVIDERS:
         yield from _stream_openai(messages, tools, timeout)
         return

@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from memory.config_manager import CONFIG_FILE, ensure_config_dir
@@ -66,7 +69,11 @@ ANTHROPIC_PROVIDER = {
     "key_field": "anthropic_api_key",
 }
 
-PROVIDER_NAMES = ("Ollama", "Local Server", *OPENAI_COMPATIBLE_PROVIDERS, "Anthropic")
+BUNDLED_OFFLINE_PROVIDER = "Bundled Offline"
+PROVIDER_NAMES = (
+    "Ollama", "Local Server", *OPENAI_COMPATIBLE_PROVIDERS,
+    "Anthropic", BUNDLED_OFFLINE_PROVIDER,
+)
 
 
 def load_api_config() -> dict[str, Any]:
@@ -75,6 +82,28 @@ def load_api_config() -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _write_api_config(data: dict[str, Any]) -> None:
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=CONFIG_FILE.parent,
+            prefix=f".{CONFIG_FILE.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            json.dump(data, temp_file, indent=2)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+            temp_path = Path(temp_file.name)
+        os.replace(temp_path, CONFIG_FILE)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def save_provider_settings(
@@ -118,7 +147,7 @@ def save_provider_settings(
         data[ANTHROPIC_PROVIDER["key_field"]] = key
 
     data["cloud_models"] = cloud_models
-    CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _write_api_config(data)
 
 
 def get_provider_config(provider: str) -> dict[str, str] | None:

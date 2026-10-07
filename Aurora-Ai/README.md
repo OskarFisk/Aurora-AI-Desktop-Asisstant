@@ -17,8 +17,10 @@ application window, and generated desktop shortcuts.
   push-to-talk, and optional screen/camera vision.
 - Selectable background/task models across Gemini, OpenAI, OpenRouter, Anthropic,
   Groq, DeepSeek, Mistral, Together AI, Fireworks AI, xAI, Cerebras, Ollama,
-  and OpenAI-compatible local servers. Provider keys and model IDs are set in
-  **AI Models & API Keys**; users supply their own API keys.
+  OpenAI-compatible local servers, and the bundled Qwen3 0.6B offline model.
+  Provider keys and model IDs are set in **AI Models & API Keys**; users supply
+  their own API keys. The offline model runs background text tasks on CPU;
+  Gemini Live voice remains unchanged.
 - Animated holographic face/reactor HUD, live audio response, system metrics,
   clipboard helper, video playback, and event/activity log.
 - Persistent memory, session summaries, reminders, proactive briefings, and
@@ -27,8 +29,9 @@ application window, and generated desktop shortcuts.
   web search, weather, travel, coding help, video, and YouTube.
 - Drop-in plugins, per-plugin settings, guarded actions, undo support, and
   live customization without restarting.
-- Six accent presets—Cyber Cyan, Plasma Violet, Solar Ember, Matrix Green,
-  Glacier Blue, and Crimson Core—plus a live color wheel and custom hex colors.
+- Ten accent presets—including Cyber Cyan, Plasma Violet, Solar Ember, Matrix
+  Green, Glacier Blue, Crimson Core, Neon Lime, Plasma Pink, Electric Orange,
+  and Arctic Teal—plus a live color wheel and custom hex colors.
 - Integrated plugins for calendar scheduling, live-weather briefings, circuit
   schematics, Spotify, video publishing, calorie tracking, and workout tracking.
   Some plugins require service credentials, a connected browser, camera access,
@@ -44,7 +47,7 @@ For a Windows release, download `A.U.R.O.R.A.exe` from the project's GitHub
 Releases page and launch it. The first run creates the local configuration
 folder and prompts for a Gemini API key. Releases contain only the `.exe`.
 
-For source installation: Python 3.11 or newer, a working microphone/speaker,
+For source installation: Python 3.12, a working microphone/speaker,
 and a Gemini API key. From this directory:
 
 ```bash
@@ -56,12 +59,17 @@ The first-run setup screen stores the Gemini API key locally in
 `config/api_keys.json`. Do not commit that file or share it. The setup script
 installs the application/plugin packages in `requirements.txt` and attempts to
 install Playwright's Chromium and Firefox browsers for browser automation.
-Packaged browser automation uses locally installed browsers (such as Edge or
-Chrome); browser binaries are not embedded in the single-file executable.
+The Windows release also bundles a quantized Qwen3 model for offline background
+text tasks. Packaged browser automation uses locally installed browsers (such
+as Edge or Chrome); browser binaries are not embedded in the single-file
+executable.
 
 For microphone, screen, or camera access on macOS/Linux, grant the relevant OS
 permissions to the terminal/application. Linux desktop actions may also need
 native tools such as `xdg-utils`, `pactl`, or `brightnessctl`.
+
+To check local Python requirements and bundled resources without starting the
+assistant, run `python diagnostics.py`. Add `--json` for machine-readable output.
 
 ## Optional integrations
 

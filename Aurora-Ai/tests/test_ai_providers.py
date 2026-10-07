@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import sys
 
-from core import ai_providers, llm_client
+from core import ai_providers, bundled_model, llm_client
 from memory import config_manager
 
 
@@ -31,6 +32,62 @@ def test_provider_settings_preserve_existing_keys_and_save_models(tmp_path, monk
     assert saved["unrelated"] == "preserved"
 
 
+def test_provider_settings_keep_existing_file_when_atomic_replace_fails(tmp_path, monkeypatch):
+    config_file = tmp_path / "api_keys.json"
+    original = {"gemini_api_key": "keep-me", "unrelated": "preserved"}
+    config_file.write_text(json.dumps(original), encoding="utf-8")
+    monkeypatch.setattr(ai_providers, "CONFIG_FILE", config_file)
+    monkeypatch.setattr(ai_providers, "ensure_config_dir", lambda: None)
+
+    def fail_replace(*_args):
+        raise OSError("simulated replacement failure")
+
+    monkeypatch.setattr(ai_providers.os, "replace", fail_replace)
+    try:
+        ai_providers.save_provider_settings("Groq", {}, {}, "", "")
+    except OSError:
+        pass
+    else:
+        raise AssertionError("Expected the simulated replacement failure")
+
+    assert json.loads(config_file.read_text(encoding="utf-8")) == original
+    assert list(tmp_path.glob(".api_keys.json.*.tmp")) == []
+
+
+def test_bundled_model_loads_lazily_and_normalizes_tool_calls(tmp_path, monkeypatch):
+    model_file = tmp_path / bundled_model.MODEL_FILENAME
+    model_file.write_bytes(b"model")
+    captured = {}
+
+    class FakeLlama:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        def create_chat_completion(self, **kwargs):
+            captured["request"] = kwargs
+            return {"choices": [{"message": {
+                "content": "Ready.",
+                "tool_calls": [{"id": "tool-1", "function": {
+                    "name": "search", "arguments": "{\"query\": \"aurora\"}",
+                }}],
+            }}]}
+
+    monkeypatch.setattr(bundled_model, "model_path", lambda: model_file)
+    monkeypatch.setattr(bundled_model, "_MODEL", None)
+    monkeypatch.setitem(sys.modules, "llama_cpp", type("FakeModule", (), {"Llama": FakeLlama}))
+
+    result = bundled_model.complete([{"role": "user", "content": "hello"}])
+
+    assert result == {
+        "content": "Ready.",
+        "tool_calls": [{"id": "tool-1", "function": {
+            "name": "search", "arguments": {"query": "aurora"},
+        }}],
+    }
+    assert captured["init"]["model_path"] == str(model_file)
+    assert captured["request"]["max_tokens"] == 512
+
+
 def test_provider_catalog_covers_brahma_cloud_providers():
     assert set(ai_providers.OPENAI_COMPATIBLE_PROVIDERS) == {
         "Gemini",
@@ -45,6 +102,7 @@ def test_provider_catalog_covers_brahma_cloud_providers():
         "Cerebras",
     }
     assert "Anthropic" in ai_providers.PROVIDER_NAMES
+    assert ai_providers.BUNDLED_OFFLINE_PROVIDER in ai_providers.PROVIDER_NAMES
 
 
 def test_cloud_provider_selection_and_model_override(monkeypatch):
@@ -169,6 +227,31 @@ def test_legacy_local_server_setting_still_routes_to_openai_compatible(monkeypat
     )
     assert llm_client.get_llm_provider() == "openai"
     assert llm_client.get_llm_settings() == ("http://localhost:1234", "local-model")
+
+
+def test_bundled_offline_provider_routes_text_chat_and_stream_without_network(monkeypatch):
+    monkeypatch.setattr(
+        llm_client,
+        "_load_config",
+        lambda: {"default_ai_provider": ai_providers.BUNDLED_OFFLINE_PROVIDER},
+    )
+    captured = []
+
+    def fake_complete(messages, tools=None, max_tokens=512):
+        captured.append((messages, tools, max_tokens))
+        return {"content": "Offline response. Ready.", "tool_calls": []}
+
+    monkeypatch.setattr(bundled_model, "complete", fake_complete)
+
+    assert llm_client.get_llm_provider() == ai_providers.BUNDLED_OFFLINE_PROVIDER
+    assert llm_client.call_llm([{"role": "user", "content": "hello"}])["content"] == "Offline response. Ready."
+    assert llm_client.call_llm_text("hello", system="Be concise") == "Offline response. Ready."
+    events = list(llm_client.call_llm_stream([{"role": "user", "content": "hello"}]))
+    assert [event["text"] for event in events if event["type"] == "sentence"] == [
+        "Offline response.", "Ready.",
+    ]
+    assert events[-1] == {"type": "done", "content": "Offline response. Ready.", "tool_calls": []}
+    assert [entry[2] for entry in captured] == [150, 600, 150]
 
 
 def test_brahma_voice_is_fixed_and_legacy_gemini_choices_are_ignored(monkeypatch):

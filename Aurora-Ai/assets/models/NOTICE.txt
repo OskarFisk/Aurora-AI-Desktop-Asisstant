@@ -1,0 +1,7 @@
+Bundled offline text model
+
+Model: Qwen3-0.6B, quantized as Q6_K GGUF
+Original model: https://huggingface.co/Qwen/Qwen3-0.6B
+Quantized artifact: https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF
+License: Apache-2.0; see Qwen3-LICENSE in this directory.
+The Windows release workflow pins the model revision and verifies its SHA-256.

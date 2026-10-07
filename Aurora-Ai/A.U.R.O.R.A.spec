@@ -5,7 +5,7 @@ import ast
 import importlib.util
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = Path(SPECPATH)
 
@@ -61,10 +61,20 @@ for package in ("google.genai", "mediapipe", "openwakeword"):
     except (ImportError, ModuleNotFoundError, ValueError):
         continue
 
+bundled_binaries = []
+try:
+    if importlib.util.find_spec("llama_cpp") is not None:
+        model_datas, model_binaries, model_imports = collect_all("llama_cpp")
+        datas.extend(model_datas)
+        bundled_binaries.extend(model_binaries)
+        hiddenimports.extend(model_imports)
+except (ImportError, ModuleNotFoundError, ValueError):
+    pass
+
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=bundled_binaries,
     datas=datas,
     hiddenimports=sorted(set(hiddenimports)),
     hookspath=[],

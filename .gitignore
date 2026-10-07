@@ -9,6 +9,8 @@ venv/
 **/node_modules/
 **/config/api_keys.json
 **/uploads/
+/Aurora-Ai/assets/models/Qwen_Qwen3-0.6B-Q6_K.gguf
+/Aurora-Ai/assets/models/Qwen3-LICENSE
 *.apk
 awesome-llm-apps-main.zip
 Brahma-Ai-Evo-main.zip
