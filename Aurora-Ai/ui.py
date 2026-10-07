@@ -33,7 +33,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
-    QFontDatabase, QKeySequence, QLinearGradient, QPainter, QPainterPath,
+    QFontDatabase, QIcon, QKeySequence, QLinearGradient, QPainter, QPainterPath,
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 # Video playback for the HUD. Part of PyQt6, so it costs no new dependency —
@@ -56,7 +56,11 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
 )
 
-from memory.config_manager import DEFAULT_ASSISTANT_NAME, normalize_assistant_name
+from memory.config_manager import (
+    BRAHMA_TTS_VOICE,
+    DEFAULT_ASSISTANT_NAME,
+    normalize_assistant_name,
+)
 from core.user_paths import get_user_data_dir
 
 
@@ -1634,7 +1638,7 @@ THEME_PRESETS = (
 
 
 class CustomizeOverlay(QWidget):
-    """Floating overlay — change assistant name, user name, UI colour and voice."""
+    """Floating overlay — change assistant name, user name and UI colour."""
 
     saved = pyqtSignal(str, str, str, str)   # assistant_name, user_name, ui_color, voice
     _OW, _OH = 400, 588
@@ -1688,29 +1692,14 @@ class CustomizeOverlay(QWidget):
         self._user_input.setStyleSheet(_fs)
         lay.addWidget(self._user_input)
 
-        # ── Assistant voice — Gemini prebuilt voices ─────────────────────────
-        # Names are language-neutral proper nouns, so the row reads the same in
-        # every locale. Selecting one and applying rebuilds the Live session.
-        from memory.config_manager import AVAILABLE_VOICES, DEFAULT_VOICE
+        # Brahma's original spoken voice is fixed to Microsoft Edge TTS Guy.
+        from memory.config_manager import DEFAULT_VOICE
         lay.addSpacing(4)
-        lay.addWidget(_lbl("ASSISTANT VOICE", 8, color=C.TEXT_DIM,
+        lay.addWidget(_lbl("BRAHMA EVO ORIGINAL JARVIS VOICE", 8, color=C.TEXT_DIM,
                             align=Qt.AlignmentFlag.AlignLeft))
-        self._sel_voice   = (voice or DEFAULT_VOICE)
-        if self._sel_voice not in AVAILABLE_VOICES:
-            self._sel_voice = DEFAULT_VOICE
-        self._voice_btns: dict[str, QPushButton] = {}
-        voice_row = QHBoxLayout(); voice_row.setSpacing(4)
-        for _v in AVAILABLE_VOICES:
-            b = QPushButton(_v)
-            b.setCheckable(True)
-            b.setFixedHeight(28)
-            b.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(lambda _=False, name=_v: self._on_voice_pick(name))
-            self._voice_btns[_v] = b
-            voice_row.addWidget(b)
-        lay.addLayout(voice_row)
-        self._refresh_voice_btns()
+        self._sel_voice = DEFAULT_VOICE
+        lay.addWidget(_lbl(f"GUY · US  ({BRAHMA_TTS_VOICE})", 9, True, C.PRI,
+                            align=Qt.AlignmentFlag.AlignLeft))
 
         # ── UI colour — colour wheel ─────────────────────────────────────────
         lay.addSpacing(4)
@@ -1809,28 +1798,6 @@ class CustomizeOverlay(QWidget):
         btn_row.addWidget(cancel_btn)
         lay.addLayout(btn_row)
 
-    # ── voice selection ──────────────────────────────────────────────────────
-    def _on_voice_pick(self, name: str):
-        self._sel_voice = name
-        self._refresh_voice_btns()
-
-    def _refresh_voice_btns(self):
-        """Highlight the selected voice pill; dim the rest."""
-        for name, b in self._voice_btns.items():
-            on = (name == self._sel_voice)
-            b.setChecked(on)
-            if on:
-                b.setStyleSheet(f"""
-                    QPushButton {{ background: {C.PRI_GHO}; color: {C.PRI};
-                        border: 1px solid {C.PRI}; border-radius: 3px; }}
-                """)
-            else:
-                b.setStyleSheet(f"""
-                    QPushButton {{ background: transparent; color: {C.TEXT_MED};
-                        border: 1px solid {C.BORDER}; border-radius: 3px; }}
-                    QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
-                """)
-
     # ── colour flow ──────────────────────────────────────────────────────────
     def _sync_theme_selection(self, color: str):
         index = self._theme_combo.findData(color)
@@ -1887,6 +1854,189 @@ class CustomizeOverlay(QWidget):
         user = self._user_input.text().strip()
         self.saved.emit(name, user, self._sel_color or DEFAULT_UI_COLOR, self._sel_voice)
         self.hide()
+
+
+class AIProviderOverlay(QWidget):
+    """Configure cloud/local task models and their API credentials."""
+
+    _OW, _OH = 560, 640
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from core.ai_providers import (
+            ANTHROPIC_PROVIDER,
+            OPENAI_COMPATIBLE_PROVIDERS,
+            PROVIDER_NAMES,
+            load_api_config,
+            save_provider_settings,
+        )
+
+        self._save_provider_settings = save_provider_settings
+        config = load_api_config()
+        self._provider_names = PROVIDER_NAMES
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            AIProviderOverlay {{
+                background: rgba(0, 6, 10, 248);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 6px;
+            }}
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(8)
+
+        title = QLabel("◈  AI MODELS & API KEYS")
+        title.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        root.addWidget(title)
+        note = QLabel(
+            "Routes background tasks and tools. Live voice conversation remains on Gemini Live. "
+            "Enter your own provider keys; keys are stored in the local app config."
+        )
+        note.setWordWrap(True)
+        note.setFont(QFont("Courier New", 8))
+        note.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        root.addWidget(note)
+
+        self._provider = QComboBox()
+        self._provider.addItems(self._provider_names)
+        self._provider.setFont(QFont("Courier New", 9))
+        self._provider.setFixedHeight(30)
+        self._provider.setStyleSheet(f"""
+            QComboBox {{ background: #000d12; color: {C.TEXT};
+                border: 1px solid {C.BORDER}; border-radius: 3px; padding: 2px 8px; }}
+            QComboBox QAbstractItemView {{ background: #000d12; color: {C.TEXT};
+                selection-background-color: {C.PRI_GHO}; }}
+        """)
+        selected = config.get("default_ai_provider")
+        if selected not in self._provider_names:
+            selected = "Local Server" if config.get("llm_provider") == "openai" else "Ollama"
+        self._provider.setCurrentText(selected)
+        root.addWidget(self._provider)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(f"QScrollArea {{ background: transparent; border: none; }}")
+        inner = QWidget()
+        form = QVBoxLayout(inner)
+        form.setContentsMargins(2, 2, 8, 2)
+        form.setSpacing(6)
+        field_style = f"""
+            QLineEdit {{ background: #000d12; color: {C.TEXT};
+                border: 1px solid {C.BORDER}; border-radius: 3px; padding: 5px 7px; }}
+            QLineEdit:focus {{ border: 1px solid {C.PRI}; }}
+        """
+        cloud_models = config.get("cloud_models", {})
+        if not isinstance(cloud_models, dict):
+            cloud_models = {}
+        self._key_fields: dict[str, QLineEdit] = {}
+        self._model_fields: dict[str, QLineEdit] = {}
+        self._provider_configs = {
+            **OPENAI_COMPATIBLE_PROVIDERS,
+            "Anthropic": ANTHROPIC_PROVIDER,
+        }
+        for provider_name, provider_config in self._provider_configs.items():
+            row = QVBoxLayout()
+            row.setSpacing(4)
+            header = QLabel(provider_name.upper())
+            header.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            configured = bool(str(config.get(provider_config["key_field"], "")).strip())
+            header.setStyleSheet(
+                f"color: {C.PRI if configured else C.TEXT_DIM}; background: transparent;"
+            )
+            row.addWidget(header)
+
+            key_field = QLineEdit()
+            key_field.setEchoMode(QLineEdit.EchoMode.Password)
+            key_field.setPlaceholderText(
+                "Key saved — leave blank to keep it" if configured else "Paste API key"
+            )
+            key_field.setFont(QFont("Courier New", 9))
+            key_field.setStyleSheet(field_style)
+            self._key_fields[provider_name] = key_field
+            row.addWidget(key_field)
+
+            model_field = QLineEdit(
+                str(cloud_models.get(provider_name) or provider_config["model"])
+            )
+            model_field.setPlaceholderText("Model ID")
+            model_field.setFont(QFont("Courier New", 9))
+            model_field.setStyleSheet(field_style)
+            self._model_fields[provider_name] = model_field
+            row.addWidget(model_field)
+            form.addLayout(row)
+
+        local_heading = QLabel("LOCAL MODEL SERVER")
+        local_heading.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        local_heading.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        form.addWidget(local_heading)
+        self._local_url = QLineEdit(
+            str(config.get("llm_url") or "http://localhost:11434")
+        )
+        self._local_url.setPlaceholderText("Server URL")
+        self._local_url.setFont(QFont("Courier New", 9))
+        self._local_url.setStyleSheet(field_style)
+        form.addWidget(self._local_url)
+        self._local_model = QLineEdit(str(config.get("llm_model") or "llama3.2"))
+        self._local_model.setPlaceholderText("Local model ID")
+        self._local_model.setFont(QFont("Courier New", 9))
+        self._local_model.setStyleSheet(field_style)
+        form.addWidget(self._local_model)
+        scroll.setWidget(inner)
+        root.addWidget(scroll, 1)
+
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setFont(QFont("Courier New", 8))
+        self._status.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        root.addWidget(self._status)
+
+        buttons = QHBoxLayout()
+        save = QPushButton("▸  SAVE PROVIDER")
+        save.setFixedHeight(32)
+        save.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        save.setCursor(Qt.CursorShape.PointingHandCursor)
+        save.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.PRI};
+                border: 1px solid {C.PRI_DIM}; border-radius: 3px; }}
+            QPushButton:hover {{ background: {C.PRI_GHO}; border-color: {C.PRI}; }}
+        """)
+        save.clicked.connect(self._save)
+        buttons.addWidget(save)
+        close = QPushButton("CLOSE")
+        close.setFixedHeight(32)
+        close.setFont(QFont("Courier New", 9))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 3px; }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        close.clicked.connect(self.hide)
+        buttons.addWidget(close)
+        root.addLayout(buttons)
+
+    def _save(self):
+        api_keys = {name: field.text() for name, field in self._key_fields.items()}
+        models = {name: field.text() for name, field in self._model_fields.items()}
+        try:
+            self._save_provider_settings(
+                self._provider.currentText(),
+                api_keys,
+                models,
+                self._local_url.text(),
+                self._local_model.text(),
+            )
+        except (OSError, ValueError) as exc:
+            self._status.setText(f"Save failed: {exc}")
+            self._status.setStyleSheet(f"color: {C.RED}; background: transparent;")
+            return
+        self._status.setText(
+            f"Saved. {self._provider.currentText()} is selected for background tasks."
+        )
+        self._status.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
 
 
 class PluginManagerOverlay(QWidget):
@@ -2774,7 +2924,7 @@ class RemoteKeyOverlay(QWidget):
 
     closed = pyqtSignal()
 
-    _OW, _OH = 400, 465
+    _OW, _OH = 400, 495
 
     def __init__(self, url: str, key: str, auto_login_url: str = "",
                  manual_url: str = "", expiry_secs: int = 600, parent=None):
@@ -2826,7 +2976,11 @@ class RemoteKeyOverlay(QWidget):
 
         self._update_qr(auto_login_url)
 
-        lay.addWidget(_lbl("Scan with phone camera to connect instantly", 8, color=C.TEXT_DIM))
+        lay.addWidget(_lbl(
+            "Scan with phone camera to connect instantly. Pair multiple iPhone, Android, "
+            "or tablet browsers by generating a fresh QR code for each device.",
+            8, color=C.TEXT_DIM,
+        ))
 
         sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine)
         sep2.setStyleSheet(f"color: {C.BORDER}; margin: 1px 0;")
@@ -3034,6 +3188,7 @@ class MainWindow(QMainWindow):
             apply_ui_accent(_ui_color)
 
         self.setWindowTitle(_window_title(_display))
+        self.setWindowIcon(QIcon(str(RESOURCE_DIR / "assets" / "aurora_icon.png")))
         self.setMinimumSize(_MIN_W, _MIN_H)
         self.resize(_DEFAULT_W, _DEFAULT_H)
 
@@ -3060,6 +3215,7 @@ class MainWindow(QMainWindow):
         self._current_file: str | None = None
         self._remote_overlay: RemoteKeyOverlay | None = None
         self._customize_overlay: CustomizeOverlay | None = None
+        self._provider_overlay: AIProviderOverlay | None = None
 
         central = QWidget()
         central.setStyleSheet(f"background: {C.BG};")
@@ -3795,10 +3951,8 @@ class MainWindow(QMainWindow):
         launch_args_quoted = f'"{launch_args}"' if launch_args else ""
         work_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else script.parent
 
-        # Arc-reactor icon (.ico — also exported as .png for Linux/macOS)
-        ico_path = get_user_data_dir() / "aurora.ico"
-        if not ico_path.exists():
-            self._build_aurora_icon(ico_path)
+        ico_path = RESOURCE_DIR / "assets" / "aurora_icon.ico"
+        png_path = RESOURCE_DIR / "assets" / "aurora_icon.png"
 
         try:
             _os = platform.system()
@@ -3847,11 +4001,14 @@ class MainWindow(QMainWindow):
                     '</dict></plist>\n'
                 )
 
-                # Optional: copy icon as .icns (skip silently if Pillow is missing)
+                # Optional: convert the supplied image to the macOS icon format.
                 try:
                     import PIL.Image
                     icns = res_dir / "AppIcon.icns"
-                    PIL.Image.open(ico_path).save(icns, format="ICNS")
+                    icon_img = PIL.Image.open(png_path).convert("RGBA").resize(
+                        (1024, 1024), PIL.Image.Resampling.LANCZOS
+                    )
+                    icon_img.save(icns, format="ICNS")
                     # Inject icon reference into plist
                     plist = app / "Contents" / "Info.plist"
                     txt = plist.read_text()
@@ -3862,22 +4019,11 @@ class MainWindow(QMainWindow):
                             '<string>AppIcon</string>\n</dict></plist>\n',
                         )
                     )
-                except Exception:
-                    pass  # icon is optional
+                except (ImportError, OSError, ValueError) as exc:
+                    self._log.append_log(f"WRN: macOS icon conversion failed — {exc}")
 
             # ── Linux — .desktop file (Terminal=false, no console) ────────────
             else:
-                # Export .ico → .png for better desktop integration
-                png_path = ico_path.with_suffix(".png")
-                if not png_path.exists() and ico_path.exists():
-                    try:
-                        import PIL.Image
-                        PIL.Image.open(ico_path).resize(
-                            (256, 256), PIL.Image.LANCZOS
-                        ).save(png_path, format="PNG")
-                    except Exception:
-                        png_path = ico_path  # fallback to .ico
-
                 icon_line = f"Icon={png_path}\n" if png_path.exists() else ""
                 desk = desktop / "A.U.R.O.R.A.desktop"
                 desk.write_text(
@@ -3924,6 +4070,14 @@ class MainWindow(QMainWindow):
             self._customize_overlay.setGeometry(
                 (cw.width()  - ow) // 2,
                 (cw.height() - oh) // 2,
+                ow, oh,
+            )
+        if self._provider_overlay and self._provider_overlay.isVisible():
+            ow = min(AIProviderOverlay._OW, cw.width() - 16)
+            oh = min(AIProviderOverlay._OH, cw.height() - 16)
+            self._provider_overlay.setGeometry(
+                max(0, (cw.width() - ow) // 2),
+                max(0, (cw.height() - oh) // 2),
                 ow, oh,
             )
         # Camera preview — bottom-right corner of the center/HUD area
@@ -4271,6 +4425,14 @@ class MainWindow(QMainWindow):
         remote_btn.setStyleSheet(_BTN_STYLE_PRI)
         remote_btn.clicked.connect(self._open_remote)
         lay.addWidget(remote_btn)
+
+        ai_btn = QPushButton("◈  AI MODELS & API KEYS")
+        ai_btn.setFixedHeight(26)
+        ai_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ai_btn.setStyleSheet(_BTN_STYLE_DIM)
+        ai_btn.clicked.connect(self._open_ai_providers)
+        lay.addWidget(ai_btn)
 
         sc_btn = QPushButton("⊞  CREATE DESKTOP SHORTCUT")
         sc_btn.setFixedHeight(26)
@@ -5388,6 +5550,22 @@ class MainWindow(QMainWindow):
         ov.saved.connect(self._apply_name_update)
         ov.show()
         self._customize_overlay = ov
+
+    def _open_ai_providers(self):
+        if self._provider_overlay:
+            self._provider_overlay.hide()
+        cw = self.centralWidget()
+        ov = AIProviderOverlay(parent=cw)
+        ow = min(AIProviderOverlay._OW, cw.width() - 16)
+        oh = min(AIProviderOverlay._OH, cw.height() - 16)
+        ov.setGeometry(
+            max(0, (cw.width() - ow) // 2),
+            max(0, (cw.height() - oh) // 2),
+            ow,
+            oh,
+        )
+        ov.show()
+        self._provider_overlay = ov
 
     def _preview_ui_color(self, hex_color: str):
         """Live preview — paints the whole interface the new colour (does NOT write to config)."""

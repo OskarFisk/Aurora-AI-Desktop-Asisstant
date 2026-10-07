@@ -11,6 +11,7 @@ BASE_DIR    = get_base_dir()
 CONFIG_DIR  = BASE_DIR / "config"
 CONFIG_FILE = CONFIG_DIR / "api_keys.json"
 DEFAULT_ASSISTANT_NAME = "A.U.R.O.R.A"
+BRAHMA_TTS_VOICE = "en-US-GuyNeural"
 
 
 def normalize_assistant_name(name: str | None) -> str:
@@ -85,22 +86,18 @@ def save_assistant_config(assistant_name: str, user_name: str) -> None:
 
 
 # ── Assistant voice ──────────────────────────────────────────────────────────
-# Gemini Live prebuilt voices. Names are proper nouns — identical in every
-# language, so this list is safe to show verbatim in any locale.
-AVAILABLE_VOICES = ["Charon", "Puck", "Kore", "Fenrir", "Aoede"]
+# Fixed Gemini audio fallback voice; spoken replies use Brahma's Edge TTS voice.
+AVAILABLE_VOICES = ["Charon"]
 DEFAULT_VOICE    = "Charon"
 
 
 def get_voice() -> str:
-    """Return the configured Live voice, falling back to the default if unset
-    or if the stored value is not a voice we recognise."""
-    v = load_api_keys().get("voice_name", DEFAULT_VOICE) or DEFAULT_VOICE
-    return v if v in AVAILABLE_VOICES else DEFAULT_VOICE
+    """Return the fixed Gemini audio fallback voice."""
+    return DEFAULT_VOICE
 
 
 def save_voice(voice_name: str) -> None:
-    """Persist the chosen Live voice. Unknown names collapse to the default so a
-    bad value can never reach the API and break the session."""
+    """Migrate legacy voice preferences to the fixed Gemini fallback."""
     ensure_config_dir()
     data: dict = {}
     if CONFIG_FILE.exists():
@@ -108,8 +105,7 @@ def save_voice(voice_name: str) -> None:
             data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except Exception:
             data = {}
-    v = (voice_name or "").strip()
-    data["voice_name"] = v if v in AVAILABLE_VOICES else DEFAULT_VOICE
+    data["voice_name"] = DEFAULT_VOICE
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
 

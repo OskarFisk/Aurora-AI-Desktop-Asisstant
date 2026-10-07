@@ -554,6 +554,7 @@ class JarvisLive:
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
         self._interrupted          = False   # True while draining audio after user interrupt
+        self._voice_engine         = None    # fixed Brahma Edge TTS voice
         # Transcript-driven mouth shapes for the avatar. Fed from the receive
         # loop as words arrive, drained by the playback loop against the audio.
         self._visemes              = VisemeStream()
@@ -1478,6 +1479,7 @@ class JarvisLive:
     async def _receive_audio(self):
         print(f"[{DEFAULT_ASSISTANT_NAME}] 👂 Recv started")
         out_buf, in_buf = [], []
+        fallback_audio = bytearray()
 
         try:
             while True:
@@ -1502,12 +1504,9 @@ class JarvisLive:
                         else:
                             if self._turn_done_event and self._turn_done_event.is_set():
                                 self._turn_done_event.clear()
-                            # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
-                            # (24000 Hz × 2 bytes/sample × 0.05 s = 2400 bytes per slice)
-                            _audio_data = response.data
-                            _SLICE = 2400
-                            for _i in range(0, len(_audio_data), _SLICE):
-                                self.audio_in_queue.put_nowait(_audio_data[_i : _i + _SLICE])
+                            # Keep Gemini audio only as a recovery path. Normal
+                            # replies are spoken with Brahma Evo's fixed Guy voice.
+                            fallback_audio.extend(response.data)
 
                     if response.server_content:
                         sc = response.server_content
@@ -1523,12 +1522,6 @@ class JarvisLive:
                             # twice AND made the avatar mouth it twice.
                             if txt and not _is_repeat_chunk(txt, out_buf):
                                 out_buf.append(txt)
-                                # Hand the words to the mouth as they arrive, so
-                                # the avatar can form the consonants the audio
-                                # alone cannot show. Pure string work — it adds
-                                # nothing measurable to the response path.
-                                self._visemes.feed_text(txt)
-
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = _clean_transcript(sc.input_transcription.text)
                             if txt:
@@ -1536,16 +1529,16 @@ class JarvisLive:
                                 self._last_user_speech = time.monotonic()
 
                         if sc.turn_complete:
-                            if self._turn_done_event:
-                                self._turn_done_event.set()
-
                             # If this turn_complete ends an interrupted response, clear the
                             # flag and skip all further processing for that turn.
                             if self._interrupted:
                                 self._interrupted = False
                                 in_buf  = []
                                 out_buf = []
+                                fallback_audio.clear()
                                 self._visemes.reset()
+                                if self._turn_done_event:
+                                    self._turn_done_event.set()
                                 continue
 
                             full_in = " ".join(in_buf).strip()
@@ -1578,7 +1571,15 @@ class JarvisLive:
                                         "text": full_out,
                                         "ts": datetime.now().isoformat(),
                                     }))
+
+                            if full_out or fallback_audio:
+                                await self._queue_original_voice(
+                                    full_out, bytes(fallback_audio)
+                                )
+                            elif self._turn_done_event:
+                                self._turn_done_event.set()
                             out_buf = []
+                            fallback_audio.clear()
 
                             if self._vision_close_pending:
                                 # This turn_complete IS the vision answer — close camera + release busy flag
@@ -1603,6 +1604,41 @@ class JarvisLive:
             print(f"[{DEFAULT_ASSISTANT_NAME}] ❌ Recv: {e}")
             traceback.print_exc()
             raise
+
+    async def _queue_original_voice(self, text: str, fallback_audio: bytes) -> None:
+        """Synthesize reply text with Brahma's voice into the normal playback queue."""
+        if self._turn_done_event:
+            self._turn_done_event.clear()
+        pcm = b""
+        if text.strip():
+            try:
+                if self._voice_engine is None:
+                    from core.tts import EdgeTTSEngine
+                    self._voice_engine = EdgeTTSEngine()
+                pcm = await asyncio.to_thread(
+                    self._voice_engine.synthesize_pcm,
+                    text,
+                    RECEIVE_SAMPLE_RATE,
+                )
+                if not pcm:
+                    raise RuntimeError("Brahma voice synthesis returned no audio.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Brahma voice synthesis failed: {exc}")
+        if not pcm and fallback_audio:
+            self.ui.write_log("SYS: Playing Gemini voice for this reply as a fallback.")
+            pcm = fallback_audio
+
+        if self._interrupted:
+            if self._turn_done_event:
+                self._turn_done_event.set()
+            return
+
+        if pcm and self.audio_in_queue is not None:
+            self._visemes.feed_text(text)
+            for offset in range(0, len(pcm), 2400):
+                await self.audio_in_queue.put(pcm[offset:offset + 2400])
+        if self._turn_done_event:
+            self._turn_done_event.set()
 
     async def _play_audio(self):
         print(f"[{DEFAULT_ASSISTANT_NAME}] 🔊 Play started")

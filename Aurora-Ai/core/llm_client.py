@@ -1,21 +1,4 @@
-"""
-Local LLM client for MARK XL.
-
-Supports two backends — selected via  "llm_provider"  in config/api_keys.json:
-
-  "llm_provider": "ollama"   (default)
-        Uses Ollama's native /api/chat endpoint.
-        Download: https://ollama.com
-        Default port: 11434
-
-  "llm_provider": "openai"
-        Uses any OpenAI-compatible server: LM Studio, Jan, LocalAI,
-        llama.cpp server, vLLM, etc.
-        LM Studio download: https://lmstudio.ai   (default port: 1234)
-        Set  "llm_url": "http://localhost:1234"  in config.
-        Note: tool-calling support depends on the model; use a model that
-        supports function/tool calls (e.g. Qwen2.5, Llama-3.1, Mistral).
-"""
+"""Route background AI tasks to Ollama, local servers, or configured cloud APIs."""
 import json
 import re
 import subprocess
@@ -25,6 +8,10 @@ from pathlib import Path
 from typing import Callable, Generator
 
 import requests
+from core.ai_providers import (
+    OPENAI_COMPATIBLE_PROVIDERS,
+    get_provider_config,
+)
 
 # Matches a sentence boundary: [.!?] followed by whitespace, or a blank line.
 # Avoids splitting on decimals (3.5) because those have no space after the dot.
@@ -47,8 +34,14 @@ _DEFAULTS = {
 
 
 def get_llm_provider() -> str:
-    """Returns 'ollama' or 'openai' (covers LM Studio, LocalAI, Jan, etc.)."""
-    raw = _load_config().get("llm_provider", "ollama").strip().lower()
+    """Return the selected local or cloud provider, retaining legacy settings."""
+    config = _load_config()
+    selected = config.get("default_ai_provider")
+    if selected in OPENAI_COMPATIBLE_PROVIDERS or selected == "Anthropic":
+        return selected
+    if selected == "Local Server":
+        return "openai"
+    raw = str(config.get("llm_provider", "ollama")).strip().lower()
     return "openai" if raw in ("openai", "lmstudio", "localai", "jan", "llamacpp") else "ollama"
 
 
@@ -67,6 +60,9 @@ def ensure_ollama_running(timeout: int = 15) -> bool:
     """
     url, _   = get_llm_settings()
     provider = get_llm_provider()
+
+    if provider in OPENAI_COMPATIBLE_PROVIDERS or provider == "Anthropic":
+        return True
 
     if provider == "openai":
         # OpenAI-compatible servers (LM Studio, LocalAI, etc.) must be started
@@ -140,6 +136,9 @@ def warmup_model(system_prompt: str | None = None) -> bool:
     url, model = get_llm_settings()
     provider   = get_llm_provider()
     print(f"[LLM] Warming up '{model}' ({provider})…")
+
+    if provider in OPENAI_COMPATIBLE_PROVIDERS or provider == "Anthropic":
+        return True
 
     messages: list[dict] = []
     if system_prompt:
@@ -221,9 +220,131 @@ def check_model_available(log: Callable | None = None) -> bool:
 def get_llm_settings() -> tuple[str, str]:
     """Returns (base_url, model_name)."""
     cfg   = _load_config()
+    provider = get_llm_provider()
+    provider_config = get_provider_config(provider)
+    if provider_config:
+        overrides = cfg.get("cloud_models", {})
+        model = overrides.get(provider) if isinstance(overrides, dict) else None
+        return provider_config["endpoint"], str(model or provider_config["model"])
     url   = cfg.get("llm_url",   _DEFAULTS["llm_url"]).rstrip("/")
     model = cfg.get("llm_model", _DEFAULTS["llm_model"])
     return url, model
+
+
+def _provider_headers(provider: str) -> dict[str, str]:
+    provider_config = get_provider_config(provider)
+    if provider_config is None:
+        raise ValueError(f"Unsupported cloud AI provider: {provider}")
+    api_key = str(_load_config().get(provider_config["key_field"], "")).strip()
+    if not api_key:
+        raise PermissionError(f"{provider} API key is missing. Add one in AI Providers settings.")
+    if provider == "Anthropic":
+        return {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+    return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+
+def _cloud_completion(
+    messages: list,
+    tools: list | None,
+    timeout: int,
+    model: str | None = None,
+) -> dict:
+    provider = get_llm_provider()
+    provider_config = get_provider_config(provider)
+    if provider_config is None:
+        raise ValueError(f"Unsupported cloud AI provider: {provider}")
+    endpoint, configured_model = get_llm_settings()
+    model = model or configured_model
+    headers = _provider_headers(provider)
+
+    if provider == "Anthropic":
+        system = "\n".join(
+            str(message.get("content", ""))
+            for message in messages
+            if message.get("role") == "system"
+        )
+        anthropic_messages = [
+            {"role": message.get("role", "user"), "content": message.get("content", "")}
+            for message in messages
+            if message.get("role") != "system"
+        ]
+        payload: dict = {"model": model, "max_tokens": 1024, "messages": anthropic_messages}
+        if system:
+            payload["system"] = system
+        if tools:
+            payload["tools"] = [
+                {
+                    "name": tool.get("function", {}).get("name", ""),
+                    "description": tool.get("function", {}).get("description", ""),
+                    "input_schema": tool.get("function", {}).get("parameters", {}),
+                }
+                for tool in tools
+            ]
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+        if response.status_code >= 400:
+            raise RuntimeError(f"Anthropic request failed (HTTP {response.status_code}). Check the API key, model, and account access.")
+        try:
+            blocks = response.json().get("content", [])
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("Anthropic returned an invalid chat response.") from exc
+        content = "".join(
+            block.get("text", "")
+            for block in blocks
+            if isinstance(block, dict) and block.get("type") == "text"
+        ).strip()
+        tool_calls = [
+            {
+                "id": block.get("id", ""),
+                "function": {
+                    "name": block.get("name", ""),
+                    "arguments": block.get("input", {}),
+                },
+            }
+            for block in blocks
+            if isinstance(block, dict) and block.get("type") == "tool_use"
+        ]
+        return {"content": content, "tool_calls": tool_calls}
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": 1024,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    try:
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"{provider} request failed due to a network error: {exc}") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"{provider} request failed (HTTP {response.status_code}). "
+            "Check the API key, model ID, account access, and network connection."
+        )
+    try:
+        message = response.json().get("choices", [{}])[0].get("message", {})
+    except (ValueError, IndexError, AttributeError, TypeError) as exc:
+        raise RuntimeError(f"{provider} returned an invalid chat response.") from exc
+    tool_calls = []
+    for call in message.get("tool_calls") or []:
+        function = call.get("function", {})
+        arguments = function.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                pass
+        tool_calls.append({
+            "id": call.get("id", ""),
+            "function": {"name": function.get("name", ""), "arguments": arguments},
+        })
+    return {"content": str(message.get("content") or "").strip(), "tool_calls": tool_calls}
 
 
 def call_llm(
@@ -239,6 +360,9 @@ def call_llm(
     """
     url, model = get_llm_settings()
     provider   = get_llm_provider()
+
+    if provider in OPENAI_COMPATIBLE_PROVIDERS or provider == "Anthropic":
+        return _cloud_completion(messages, tools, timeout)
 
     if provider == "openai":
         endpoint = f"{url}/v1/chat/completions"
@@ -339,6 +463,13 @@ def call_llm_text(
     Used by planner, executor, error_handler, code_helper, dev_agent.
     """
     url, default_model = get_llm_settings()
+    if get_llm_provider() in OPENAI_COMPATIBLE_PROVIDERS or get_llm_provider() == "Anthropic":
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        return _cloud_completion(messages, None, timeout, model)["content"]
+
     endpoint = f"{url}/api/chat"
     m        = model or default_model
 
@@ -380,8 +511,10 @@ def _stream_openai(
     Parses Server-Sent Events (SSE) and accumulates streaming tool-call fragments
     so the output format is identical to the Ollama backend.
     """
+    provider = get_llm_provider()
+    provider_config = get_provider_config(provider)
     url, model = get_llm_settings()
-    endpoint   = f"{url}/v1/chat/completions"
+    endpoint = provider_config["endpoint"] if provider_config else f"{url}/v1/chat/completions"
 
     payload: dict = {
         "model":      model,
@@ -392,9 +525,10 @@ def _stream_openai(
     if tools:
         payload["tools"]       = tools
         payload["tool_choice"] = "auto"
+    headers = _provider_headers(provider) if provider_config else {}
 
     try:
-        with requests.post(endpoint, json=payload, timeout=timeout, stream=True) as resp:
+        with requests.post(endpoint, headers=headers, json=payload, timeout=timeout, stream=True) as resp:
             resp.raise_for_status()
             full_content = ""
             buf          = ""
@@ -501,8 +635,16 @@ def call_llm_stream(
     Tool calls always appear in the final "done" event.
     """
     provider = get_llm_provider()
-    if provider == "openai":
+    if provider in OPENAI_COMPATIBLE_PROVIDERS:
         yield from _stream_openai(messages, tools, timeout)
+        return
+    if provider == "Anthropic":
+        result = _cloud_completion(messages, tools, timeout)
+        content = result["content"]
+        for sentence in re.split(r"(?<=[.!?])\s+|(?<=\n)\s*\n", content):
+            if sentence.strip():
+                yield {"type": "sentence", "text": sentence.strip()}
+        yield {"type": "done", "content": content, "tool_calls": result["tool_calls"]}
         return
 
     url, model = get_llm_settings()

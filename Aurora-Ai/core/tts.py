@@ -1,9 +1,7 @@
 """
-Text-to-Speech engines for MARK XL.
+Text-to-speech helpers for A.U.R.O.R.A.
 
-EdgeTTS     – free Microsoft TTS (internet required, no API key)
-Kokoro      – fully offline neural TTS (~330 MB model)
-ElevenLabs  – cloud API (API key required, best quality)
+The Brahma Evo voice is Microsoft Edge TTS en-US-GuyNeural.
 """
 from __future__ import annotations
 
@@ -15,6 +13,7 @@ from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
+from memory.config_manager import BRAHMA_TTS_VOICE
 
 
 
@@ -105,17 +104,44 @@ def _play_audio_bytes(audio_bytes: bytes) -> None:
 class EdgeTTSEngine:
     """Microsoft EdgeTTS – free, requires internet."""
 
-    def __init__(self, voice: str = "en-US-GuyNeural"):
-        self.voice = voice
+    def __init__(self, voice: str = BRAHMA_TTS_VOICE):
+        self.voice = BRAHMA_TTS_VOICE
 
     def speak(self, text: str) -> None:
-        loop = asyncio.new_event_loop()
-        try:
-            audio_bytes = loop.run_until_complete(self._synth(text))
-        finally:
-            loop.close()
+        audio_bytes = self.synthesize(text)
         if audio_bytes:
             _play_audio_bytes(audio_bytes)
+
+    def synthesize(self, text: str) -> bytes:
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(self._synth(text))
+        finally:
+            loop.close()
+
+    def synthesize_pcm(self, text: str, sample_rate: int = 24_000) -> bytes:
+        """Return mono signed-16 PCM for the desktop's existing audio pipeline."""
+        import miniaudio
+
+        audio_bytes = self.synthesize(text)
+        if not audio_bytes:
+            raise RuntimeError("Brahma voice synthesis returned no audio.")
+        decoded = miniaudio.decode(
+            audio_bytes,
+            output_format=miniaudio.SampleFormat.FLOAT32,
+            nchannels=1,
+        )
+        samples = np.asarray(decoded.samples, dtype=np.float32)
+        source_rate = int(decoded.sample_rate)
+        if samples.size == 0 or source_rate <= 0:
+            raise RuntimeError("Brahma voice synthesis returned invalid audio.")
+        if source_rate != sample_rate:
+            target_length = max(1, round(samples.size * sample_rate / source_rate))
+            source_positions = np.arange(samples.size, dtype=np.float64)
+            target_positions = np.linspace(0, samples.size - 1, target_length)
+            samples = np.interp(target_positions, source_positions, samples).astype(np.float32)
+        pcm = np.clip(samples, -1.0, 1.0)
+        return (pcm * 32767.0).astype(np.int16).tobytes()
 
     async def _synth(self, text: str) -> bytes:
         import edge_tts
@@ -427,16 +453,4 @@ class TTSPlayer:
 # ---------------------------------------------------------------------------
 
 def create_tts_player(config: dict) -> TTSPlayer:
-    engine_name = config.get("tts_engine", "edgetts").lower()
-    if engine_name == "kokoro":
-        voice  = config.get("tts_voice", "af_heart")
-        speed  = float(config.get("tts_speed", 1.0))
-        engine = KokoroTTSEngine(voice=voice, speed=speed)
-    elif engine_name == "elevenlabs":
-        api_key  = config.get("elevenlabs_api_key", "")
-        voice_id = config.get("tts_voice", "pNInz6obpgDQGcFmaJgB")
-        engine   = ElevenLabsTTSEngine(api_key=api_key, voice_id=voice_id)
-    else:   # edgetts (default)
-        voice  = config.get("tts_voice", "en-US-GuyNeural")
-        engine = EdgeTTSEngine(voice=voice)
-    return TTSPlayer(engine)
+    return TTSPlayer(EdgeTTSEngine())

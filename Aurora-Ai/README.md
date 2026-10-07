@@ -7,11 +7,18 @@ Gemini Live voice and vision, persistent memory, system telemetry, and an
 extensible action/plugin system. The supplied Aurora desktop runtime is the
 application entry point; it brings the overlapping assistant code into one
 coherent experience rather than launching separate legacy interfaces.
+The supplied A.U.R.O.R.A artwork is used for the Windows executable,
+application window, and generated desktop shortcuts.
 
 ## Capabilities
 
-- Live voice conversation with configurable Gemini voice, microphone, speaker,
+- Live voice conversation with Gemini Live and Brahma Evo's fixed Guy Neural
+  speech output, microphone, speaker,
   push-to-talk, and optional screen/camera vision.
+- Selectable background/task models across Gemini, OpenAI, OpenRouter, Anthropic,
+  Groq, DeepSeek, Mistral, Together AI, Fireworks AI, xAI, Cerebras, Ollama,
+  and OpenAI-compatible local servers. Provider keys and model IDs are set in
+  **AI Models & API Keys**; users supply their own API keys.
 - Animated holographic face/reactor HUD, live audio response, system metrics,
   clipboard helper, video playback, and event/activity log.
 - Persistent memory, session summaries, reminders, proactive briefings, and
@@ -66,6 +73,12 @@ native tools such as `xdg-utils`, `pactl`, or `brightnessctl`.
   on the user's system.
 - Remote dashboard: install `fastapi`, `uvicorn[standard]`, `cryptography`, and
   `python-multipart` if using dashboard routes that depend on those packages.
+- Phone dashboard pairing works in Android, iPhone/iPad, and tablet browsers.
+  Pair each device with a fresh QR code; there is no fixed one-phone limit.
+- Brahma Evo's source contains no recorded Jarvis speech file. A.U.R.O.R.A uses
+  the original Edge TTS voice ID `en-US-GuyNeural` for spoken replies. Gemini
+  Live still handles the conversation and provides a spoken-audio fallback if
+  Edge TTS is unavailable. The voice requires an internet connection.
 - Plugins with missing optional credentials or integrations report unavailable
   status rather than blocking application startup.
 

@@ -55,6 +55,10 @@ def test_frozen_resource_requirements_are_bundled():
     assert {"actions", "plugins", "core", "dashboard/static", "assets"} <= folders
     assert (root / "core" / "prompt.txt").is_file()
     assert (root / "core" / "face_model.obj").is_file()
+    assert (root / "assets" / "aurora_icon.png").is_file()
+    assert (root / "assets" / "aurora_icon.ico").is_file()
+    spec_text = (root / "A.U.R.O.R.A.spec").read_text(encoding="utf-8")
+    assert 'icon=str(ROOT / "assets" / "aurora_icon.ico")' in spec_text
 
 
 def test_user_data_folder_has_application_identity():
