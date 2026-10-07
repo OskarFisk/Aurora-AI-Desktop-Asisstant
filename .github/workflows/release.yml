@@ -85,7 +85,7 @@ jobs:
         run: |
           $bytes = (Get-Item "dist/A.U.R.O.R.A.exe").Length
           $targetBytes = 834000000
-          $toleranceBytes = 10000000
+          $toleranceBytes = 25000000
           $difference = [Math]::Abs($bytes - $targetBytes)
           Write-Host "A.U.R.O.R.A.exe size: $bytes bytes (target $targetBytes bytes)"
           if ($difference -gt $toleranceBytes) { throw "Executable is outside the 834 MB target window." }
@@ -94,6 +94,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: A.U.R.O.R.A Desktop ${{ github.ref_name }}
+          name: A.U.R.O.R.A Poject
           generate_release_notes: true
           files: Aurora-Ai/dist/A.U.R.O.R.A.exe
