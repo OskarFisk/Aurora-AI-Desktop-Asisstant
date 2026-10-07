@@ -43,7 +43,7 @@ def test_frozen_resource_requirements_are_bundled():
     root = Path(__file__).resolve().parents[1]
     spec = ast.parse((root / "A.U.R.O.R.A.spec").read_text(encoding="utf-8"))
     folders = {
-        node.value.value
+        node.value
         for node in ast.walk(spec)
         if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
